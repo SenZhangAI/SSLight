@@ -6,6 +6,6 @@ An implement of SSL/TLS based on 《Implementing SSL/TLS using cryptography and 
 ## Progress
 
 + [X] Basic HTTP
-+ [ ] Proxy
++ [X] Proxy
 + [X] base64 encoding/decoding
 

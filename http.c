@@ -35,10 +35,63 @@ int parse_url(char *uri, char **host, char **path)
     return 0;
 }
 
+int parse_proxy_param(char *proxy_spec,
+                      char **proxy_host,
+                      int *proxy_port,
+                      char **proxy_user,
+                      char **proxy_password)
+{
+    char *login_sep, *colon_sep, *trailer_sep;
+    if (!strncmp("http://", proxy_spec, 7)) {
+        proxy_spec += 7;
+    }
+
+    login_sep = strchr(proxy_spec, '@');
+    if (login_sep) {
+        colon_sep = strchr(proxy_spec, ':');
+        if (!colon_sep || (colon_sep > login_sep)) {
+            fprintf(stderr, "Expected password in '%s'\n, proxy_spec");
+            return 0;
+        }
+        *colon_sep = '\0';
+        *proxy_user = proxy_spec;
+        *login_sep = '\0';
+        *proxy_password = colon_sep + 1;
+        proxy_spec = login_sep + 1;
+    }
+    tailer_sep = strchr(proxy_spec, '/');
+    if (tailer_sep) {
+        *tailer_sep = '\0';
+    }
+    colon_sep = strchr(proxy_spec, ':');
+    if (colon_sep) {
+        *colon_sep = '\0';
+        *proxy_host = proxy_spec;
+        *proxy_port = atoi(colon_sep + 1);
+        if (*proxy_port == 0) {
+            return 0;
+        }
+    } else {
+        *proxy_port = HTTP_PORT;
+        *proxy_host = proxy_spec;
+    }
+    return 1;
+}
+
 #define MAX_GET_COMMAND 255
-int http_get(int connection, const char *path, const char *host)
+int http_get(int connection,
+             const char *path,
+             const char *host,
+             const char *proxy_host,
+             const char *proxy_user,
+             const char *proxy_password)
 {
     static char get_command[MAX_GET_COMMAND];
+    if (proxy_host) {
+        sprintf(get_command, "GET http://%s/%s HTTP/1.1\r\n", host, path);
+    } else {
+        sprintf(get_command, "GET /%s HTTP/1.1\r\n", path);
+    }
 
     sprintf(get_command, "GET /%s HTTP/1.1\r\n", path);
     if (send(connection, get_command, strlen(get_command), 0) == -1) {
@@ -49,6 +102,24 @@ int http_get(int connection, const char *path, const char *host)
     if (send(connection, get_command, strlen(get_command), 0) == -1) {
         return -1;
     }
+
+    if (proxy_user) {
+        int credentials_len = strlen(proxy_user) + strlen(proxy_password) + 1;
+        char *proxy_credentials = malloc(credentials_len);
+        char *auth_string = malloc(((credentials_len * 4) / 3) + 1);
+        sprintf(proxy_credentials, "%s:%s", proxy_user, proxy_password);
+        base64_encode(proxy_credentials, credentials_len, auth_string);
+
+        if (send(connection, get_command, strlen(get_command), 0) == -1) {
+            free(proxy_credentials);
+            free(auth_string);
+            return -1;
+        }
+
+        free(proxy_credentials);
+        free(auth_string);
+    }
+
     sprintf(get_command, "Connection: close\r\n\r\n");
     if (send(connection, get_command, strlen(get_command), 0) == -1) {
         return -1;
@@ -72,23 +143,41 @@ void display_result(int connection)
 int main(int argc, char *argv[])
 {
     int client_conn;
+    char *proxy_host, *proxy_user, *proxy_password;
+    int proxy_port;
     char *host, *path;
     struct hostent *host_name;
     struct sockaddr_in host_addr;
+    int idx;
 #ifdef WIN32
     WSADATA wsaData;
 #endif
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s: <URL>\n", argv[0]);
+        fprintf(stderr, "Usage: %s: [-p http://[username:password@]proxy-host:proxy-port] <URL>\n", argv[0]);
         return 1;
     }
+    proxy_host = proxy_user = proxy_password = host = path = NULL;
+    int d = 1;
+    if (!strcmp("-p", argv[idx])) {
+        if (!parse_proxy_param(argv[++idx], &proxy_host, &proxy_port,
+                               &proxy_user, &proxy_password)) {
+            fprintf(stderr, "Error - malformed proxy parameter '%s'.\n", argv[2]);
+            return 2;
+        }
+        idx++;
+    }
 
-    if (parse_url(argv[1], &host, &path) == -1) {
+    if (parse_url(argv[idx], &host, &path) == -1) {
         fprintf(stderr, "Error - malformed URL '%s'.\n", argv[1]);
         return 1;
     }
-
-    printf("Connecting to host '%s'\n", host);
+    if (proxy_host) {
+        printf("\033[32mConnecting to host '%s'\n\033[0m", proxy_host);
+        host_name = gethostbyname(proxy_host);
+    } else {
+        printf("\033[32mConnecting to host '%s'\n\033[0m", host);
+        host_name = gethostbyname(host);
+    }
 
 #ifdef WIN32
     if(WSAStartup(MAKEWORD(2, 2), &wsaData) != NO_ERROR) {
@@ -98,13 +187,10 @@ int main(int argc, char *argv[])
 #endif
 
     client_conn = socket(PF_INET, SOCK_STREAM, 0);
-
     if (!client_conn) {
         perror("Unable to create local socket.");
         return 2;
     }
-
-    host_name = gethostbyname(host);
 
     if (!host_name) {
         perror("Error in name resolution.");
@@ -112,7 +198,7 @@ int main(int argc, char *argv[])
     }
 
     host_addr.sin_family = AF_INET;
-    host_addr.sin_port = htons(HTTP_PORT);
+    host_addr.sin_port = htons(proxy_host ? proxy_port : HTTP_PORT);
     memcpy(&host_addr.sin_addr, host_name->h_addr_list[0],
            sizeof(struct in_addr));
 
@@ -121,21 +207,21 @@ int main(int argc, char *argv[])
         return 4;
     }
 
-    printf("Retrieving document: '%s'\n", path);
+    printf("\033[32mRetrieving document: '%s'\n\033[0m", path);
 
-    http_get(client_conn, path, host);
+    http_get(client_conn, path, host, proxy_host, proxy_user, proxy_password);
     display_result(client_conn);
-    printf("Shutting down.\n");
+    printf("\033[32mShutting down.\n\033[0m");
 
 #ifdef WIN32
     if (closesocket(client_conn) == -1)
 #else
-    if (close(client_conn) == -1)
+        if (close(client_conn) == -1)
 #endif
-    {
-        perror("Error closing client connection");
-        return 5;
-    }
+        {
+            perror("Error closing client connection");
+            return 5;
+        }
 #ifdef WIN32
     WSACleanup();
 #endif

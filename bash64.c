@@ -4,6 +4,7 @@ static char *base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 void base64_encode(const unsigned char *input, int len, unsigned char *output)
 {
     do {
+        // 0xFC: 1111 1100
         *output++ = base64[(input[0] & 0xFC) >> 2];
 
         if (len == 1) {
