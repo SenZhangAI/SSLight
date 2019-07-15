@@ -1,7 +1,7 @@
 
 ## Intro
 
-An implement of SSL/TLS based on 《Implementing SSL/TLS using cryptography and PKI》
+An implement of SSL/TLS
 
 ## Progress
 
@@ -9,3 +9,10 @@ An implement of SSL/TLS based on 《Implementing SSL/TLS using cryptography and 
 + [X] Proxy
 + [X] base64 encoding/decoding
 
+## Get Start
+
+
+
+## References
+
+《Implementing SSL/TLS using cryptography and PKI》
